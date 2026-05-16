@@ -6,6 +6,7 @@ const axios = require('axios');
 require('dotenv').config();
 const serverless = require('serverless-http');
 const rateLimit = require('express-rate-limit');
+const { sendOrderReceiptEmail, normalizeEmail, isValidEmail } = require('./email/mailer');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -85,6 +86,7 @@ const orderItemSchema = new mongoose.Schema({
 const orderSchema = new mongoose.Schema({
   order_id: { type: String, unique: true, required: true },
   customer_name: { type: String, required: true },
+  email: { type: String, trim: true, lowercase: true, default: '' },
   phone: { type: String, required: true },
   address: { type: String, required: true },
   city: { type: String, required: true },
@@ -362,7 +364,7 @@ app.delete('/api/products/:id', async (req, res) => {
 // Create order
 app.post('/api/orders', orderCreationRateLimiter, async (req, res) => {
   try {
-    const { customer_name, phone, address, city, pincode, items, total } = req.body;
+    const { customer_name, phone, address, city, pincode, items, total, email } = req.body;
 
     if (!customer_name || !phone || !address || !city || !pincode) {
       return res.status(400).json({ success: false, message: 'Missing delivery or contact details' });
@@ -404,9 +406,15 @@ app.post('/api/orders', orderCreationRateLimiter, async (req, res) => {
 
     const order_id = generateOrderId();
 
+    let customerEmail = normalizeEmail(email);
+    if (customerEmail && !isValidEmail(customerEmail)) {
+      return res.status(400).json({ success: false, message: 'Invalid email address' });
+    }
+
     const orderDoc = {
       order_id,
       customer_name: String(customer_name).trim().slice(0, 120),
+      email: customerEmail,
       phone: phoneDigits.slice(0, 15),
       address: String(address).trim().slice(0, 500),
       city: String(city).trim().slice(0, 80),
@@ -484,36 +492,71 @@ app.get('/api/orders/:orderId', async (req, res) => {
   }
 });
 
-// Confirm payment (admin action)
+// Confirm payment (admin action) — sends HTML receipt email when customer email is on file
 app.patch('/api/orders/:orderId/confirm-payment', async (req, res) => {
   try {
-    const { notes } = req.body;
+    const { notes, email: emailFromBody } = req.body;
 
     if (!isDbReady()) {
       const order = memoryOrders.find((o) => o.order_id === req.params.orderId);
       if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
+
       order.payment_status = 'paid';
       order.status = 'confirmed';
       order.confirmed_at = new Date();
       order.notes = notes || 'Payment confirmed via WhatsApp';
       order.updated_at = new Date();
-      return res.json({ success: true, message: 'Payment confirmed' });
+
+      const bodyEmail = normalizeEmail(emailFromBody);
+      if (bodyEmail) {
+        if (!isValidEmail(bodyEmail)) {
+          return res.status(400).json({ success: false, message: 'Invalid email address' });
+        }
+        order.email = bodyEmail;
+      }
+
+      const receipt_email = await sendOrderReceiptEmail(order);
+      return res.json({
+        success: true,
+        message: 'Payment confirmed',
+        receipt_email,
+      });
+    }
+
+    const existing = await Order.findOne({ order_id: req.params.orderId });
+    if (!existing) return res.status(404).json({ success: false, message: 'Order not found' });
+
+    const update = {
+      payment_status: 'paid',
+      status: 'confirmed',
+      confirmed_at: new Date(),
+      notes: notes || 'Payment confirmed via WhatsApp',
+    };
+
+    const bodyEmail = normalizeEmail(emailFromBody);
+    if (bodyEmail) {
+      if (!isValidEmail(bodyEmail)) {
+        return res.status(400).json({ success: false, message: 'Invalid email address' });
+      }
+      update.email = bodyEmail;
     }
 
     const order = await Order.findOneAndUpdate(
       { order_id: req.params.orderId },
-      {
-        payment_status: 'paid',
-        status: 'confirmed',
-        confirmed_at: new Date(),
-        notes: notes || 'Payment confirmed via WhatsApp',
-      },
+      update,
       { new: true }
-    );
-    if (!order) return res.status(404).json({ success: false, message: 'Order not found' });
-    res.json({ success: true, message: 'Payment confirmed' });
+    ).lean();
+
+    const receipt_email = await sendOrderReceiptEmail(order);
+
+    res.json({
+      success: true,
+      message: 'Payment confirmed',
+      receipt_email,
+    });
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Server error' });
+    console.error(err);
+    res.status(500).json({ success: false, message: err.message || 'Server error' });
   }
 });
 

@@ -79,7 +79,7 @@ async function loadProducts() {
 
 // --- CART STATE ---
 let cart = JSON.parse(localStorage.getItem('brownie_bliss_cart') || '[]');
-let checkoutState = { name: '', phone: '', address: '', city: '', pincode: '', verified: false, currentStep: 1 };
+let checkoutState = { name: '', phone: '', email: '', address: '', city: '', pincode: '', verified: false, currentStep: 1 };
 
 function saveCart() {
     localStorage.setItem('brownie_bliss_cart', JSON.stringify(cart));
@@ -201,6 +201,10 @@ function injectCheckoutModal() {
                             <input type="tel" id="custPhone" placeholder="10-digit number" maxlength="10">
                         </div>
                     </div>
+                    <div class="form-group">
+                        <label>Email <span style="font-weight:400;color:var(--text-mid);font-size:12px;">(for your receipt)</span></label>
+                        <input type="email" id="custEmail" placeholder="you@example.com" autocomplete="email">
+                    </div>
                     <button class="hero-cta" style="width: 100%; margin-top: 20px;" onclick="sendOTP()">
                         Send Verification OTP &rarr;
                     </button>
@@ -279,7 +283,7 @@ function openCheckout() {
     }
     injectCheckoutModal();
     closeCart();
-    checkoutState = { name: '', phone: '', address: '', city: '', pincode: '', verified: false, currentStep: 1 };
+    checkoutState = { name: '', phone: '', email: '', address: '', city: '', pincode: '', verified: false, currentStep: 1 };
     showCheckoutStep(1);
     document.getElementById('checkoutOverlay').classList.add('open');
 }
@@ -305,14 +309,19 @@ function showCheckoutStep(n) {
 async function sendOTP() {
     const name = document.getElementById('custName').value.trim();
     const phone = document.getElementById('custPhone').value.trim();
+    const email = document.getElementById('custEmail')?.value.trim() || '';
 
     if (!name) { showToast('Please enter your name'); return; }
     if (!phone || phone.length !== 10 || !/^\d+$/.test(phone)) {
         showToast('Enter a valid 10-digit phone number'); return;
     }
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        showToast('Enter a valid email address'); return;
+    }
 
     checkoutState.name = name;
     checkoutState.phone = phone;
+    checkoutState.email = email;
 
     // Bypassing OTP
     checkoutState.verified = true;
@@ -365,6 +374,7 @@ function goToConfirm() {
     document.getElementById('confirmCustomer').innerHTML = `
         <div style="font-weight:600; color:var(--brown-dark)">${checkoutState.name}</div>
         <div style="font-size:13px; color:var(--text-mid); margin-bottom:4px">+91 ${checkoutState.phone}</div>
+        ${checkoutState.email ? `<div style="font-size:13px; color:var(--text-mid); margin-bottom:4px">${checkoutState.email}</div>` : ''}
         <div style="font-size:13px; color:var(--text-mid); line-height:1.4">${addr}, ${city} - ${pin}</div>
     `;
 
@@ -385,6 +395,7 @@ async function placeOrder() {
     const orderData = {
         customer_name: checkoutState.name,
         phone: checkoutState.phone,
+        email: checkoutState.email || undefined,
         address: checkoutState.address,
         city: checkoutState.city,
         pincode: checkoutState.pincode,
