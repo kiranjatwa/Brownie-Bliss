@@ -9,9 +9,11 @@ const adminRoutes = require('./routes/adminRoutes');
 const otpRoutes = require('./routes/otpRoutes');
 const productRoutes = require('./routes/productRoutes');
 const orderRoutes = require('./routes/orderRoutes');
+const adminAuth = require('../middlewares/adminAuth');
+const { getStats } = require('./controllers/orderController');
 
 const app = express();
-app.set('trust proxy', 1);
+const PORT = process.env.PORT || 3000;
 
 // ─── GLOBAL MIDDLEWARE ──────────────────────────────────────────────────────────
 app.use(cors());
@@ -19,18 +21,12 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
 // ─── DB CONNECTION (per-request, serverless-safe) ───────────────────────────────
-const MONGO_URI = process.env.MONGO_URI;
-if (!MONGO_URI) {
-  console.warn('⚠️  MONGO_URI is not set. Orders and products API run in memory/static mode until you restart the server.');
-}
-
 app.use(async (req, res, next) => {
-  if (!MONGO_URI) return next();
   try {
     await connectDB();
     next();
   } catch (err) {
-    res.status(503).json({ success: false, message: `Database connection failed: ${err.message}` });
+    res.status(500).json({ success: false, message: `Database connection failed: ${err.message}` });
   }
 });
 
@@ -39,6 +35,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api', otpRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/orders', orderRoutes);
+app.get('/api/stats', adminAuth, getStats);
 
 // ─── STATIC FALLBACK ────────────────────────────────────────────────────────────
 app.get('*', (req, res) => {
@@ -51,16 +48,26 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: 'Something went wrong!' });
 });
 
-// ─── LOCAL PORT BINDING ────────────────────────────────────────────────────────
-if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, (err) => {
-    if (err) {
-      console.error('❌ Server startup error:', err);
+// ─── LOCAL SERVER ───────────────────────────────────────────────────────────────
+function startServer(port) {
+  const server = app.listen(port, () => {
+    console.log(`🚀 Server running at http://localhost:${port}`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE' && !process.env.PORT) {
+      const nextPort = Number(port) + 1;
+      console.warn(`⚠️ Port ${port} is already in use. Trying ${nextPort}...`);
+      startServer(nextPort);
       return;
     }
-    console.log(`🚀 Server listening on http://localhost:${PORT}`);
+    console.error('❌ Server startup error:', err);
+    process.exit(1);
   });
+}
+
+if (process.env.NODE_ENV !== 'production') {
+  startServer(PORT);
 }
 
 module.exports = app;
