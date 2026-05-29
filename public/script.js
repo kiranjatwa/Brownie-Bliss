@@ -328,6 +328,10 @@ async function loadProducts() {
     } else {
       useFallbackProducts();
     }
+  } catch (e) {
+    console.error('Error loading products from database:', e);
+    useFallbackProducts();
+  }
 
   if (document.getElementById('productsGrid')) {
     filterProducts('all');
